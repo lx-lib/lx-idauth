@@ -1,0 +1,21 @@
+- client_id: nobid-lsp-latvia.lx.demo
+  redirect_uri: 
+    - https://localhost:44341/auth-done
+- client_id: abcd2
+  client_secret: 
+    - 1234
+  scopes:
+    - test1
+    - test2
+  grant_types:
+    - client_credentials
+    - basic
+- client_id: urn:uuid:5f81f5bd-ab5f-42df-96f6-fcf89abaca43:F2AA933282EE46BCF8FEAE5812D648DB79C78C6E
+  client_secret: 
+  scopes:
+    - test1
+    - test2
+  grant_types:
+    - client_credentials
+    - basic
+    - pfas

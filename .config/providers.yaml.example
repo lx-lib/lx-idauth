@@ -1,0 +1,18 @@
+#- id: zz-azure
+#  type: oidc
+#  metadata_url: https://login.microsoftonline.com/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/v2.0
+#  client_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#  client_secret: xxxxxxxxxxxxxxxxx
+#  scope: 
+#    - openid
+#    - profile
+#    - email
+#- id: google
+#  type: OIDC
+#  client_id: xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
+#  client_secret: xxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#  metadata_url: https://accounts.google.com
+#  scope:
+#    - openid
+#    - email
+#    - profile

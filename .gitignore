@@ -1,0 +1,8 @@
+.env
+publish
+**/*.exe
+.config/*.yaml
+cmd/server/__debug_bin*
+swagger.json
+/vendor
+.idea

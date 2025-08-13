@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Launch (web)",
+        "type": "go",
+        "request": "launch",
+        "mode": "debug",
+        "buildFlags": "-tags 'netgo osusergo'",
+        "program": "${workspaceRoot}/cmd/server/",
+        "args": [
+          "web"
+        ],
+        "cwd": "${workspaceFolder}",
+        "envFile": "${workspaceFolder}/.env",
+        "serverReadyAction": {
+          "action": "openExternally",
+          "pattern": "\"Listening on (https?://.+)\\.\\.\\.\""
+        }
+      }
+    ]
+  }
