@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core/auth"
+	"github.com/lx-lib/lx-idauth/core/auth"
 
 	"azugo.io/azugo"
 	"github.com/valyala/fasthttp"
@@ -23,6 +23,13 @@ type OrganizationEntity struct {
 	UserOrganizationID string `json:"user_organization_id"`
 }
 
+// DataScope represents the data scope of the user roles.
+type DataScopes struct {
+	ID   int    `json:"id" example:"123"`
+	Code string `json:"code" example:"PRESCHOOL"`
+	Name string `json:"name" example:"Test data scope"`
+}
+
 type RoleEntity struct {
 	ID           string              `json:"id"`
 	UserRoleID   string              `json:"user_role_id"`
@@ -32,6 +39,7 @@ type RoleEntity struct {
 	ShortName    string              `json:"short_name"`
 	Description  string              `json:"description"`
 	Blocked      bool                `json:"blocked"`
+	DataScopes   []*DataScopes       `json:"data_scopes"`
 }
 
 type GrantedRightListEntity struct {
@@ -57,17 +65,23 @@ type UserData struct {
 	FirstName       string                    `json:"first_name"`
 	LastName        string                    `json:"last_name"`
 	Email           string                    `json:"email"`
+	PhoneNumber     string                    `json:"phone_number"`
+	IsTOSAccepted   bool                      `json:"is_tos_accepted"`
 	Roles           []*RoleEntity             `json:"roles"`
 	Rights          []*GrantedRightListEntity `json:"rights"`
 }
 
 type GetUserDataRequest struct {
-	Code         string  `json:"code" example:"01020311111"`
-	FirstName    string  `json:"first_name" validate:"required" example:"John"`
-	LastName     string  `json:"last_name" validate:"required" example:"Doe"`
-	Email        string  `json:"email" example:"john.doe@gmail.com"`
-	ClientID     *string `json:"client_id" example:"892df848-ad6f-458a-b77b-435d98e7dbc1"`
-	ClientSecret *string `json:"client_secret"`
+	Code          string                  `json:"code" example:"01020311111"`
+	FirstName     string                  `json:"first_name" validate:"required" example:"John"`
+	LastName      string                  `json:"last_name" validate:"required" example:"Doe"`
+	Email         string                  `json:"email" example:"john.doe@gmail.com"`
+	ProviderID    string                  `json:"provider_id" example:"vpm"`
+	ClientID      *string                 `json:"client_id" example:"892df848-ad6f-458a-b77b-435d98e7dbc1"`
+	ClientSecret  *string                 `json:"client_secret"`
+	IsTOSAccepted bool                    `json:"is_tos_accepted"`
+	Organizations []*AuthUserOrganization `json:"organizations,omitempty"`
+	RawClaims     map[string]any          `json:"raw_claims,omitempty"`
 }
 
 type Authorizer interface {

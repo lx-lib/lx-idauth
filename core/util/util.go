@@ -2,6 +2,7 @@ package util
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,4 +40,26 @@ func StrToPtrInt(v string) *int {
 	}
 
 	return &p
+}
+
+func CloneStr(s string) string {
+	return strings.Clone(s)
+}
+
+func CloneStrPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+
+	clone := strings.Clone(*s)
+	return &clone
+}
+
+func CloneTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+
+	clone := *t
+	return &clone
 }

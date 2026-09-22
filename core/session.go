@@ -1,32 +1,53 @@
 package core
 
 import (
+	"context"
+	"strconv"
 	"time"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/token"
 )
 
-type Session struct {
-	ID            string
-	State         string
-	Code          string
-	Subject       string
-	FirstName     string
-	LastName      string
-	Email         string
-	Role          *RoleEntity
-	Specialty     string
-	ValidDateTill *time.Time
-	Scope         []string
-	LastAccessed  *time.Time
-	Roles         []*RoleEntity
-	Rights        []*GrantedRightListEntity
-	Metadata      map[string]string
+type DeviceEntity struct {
+	IPAddress *string `json:"ip_address"`
+	UserAgent *string `json:"user_agent"`
 }
 
-func (s *Session) GetSecondsToLive(sessionTimeout time.Duration) int {
-	return int((sessionTimeout - time.Now().UTC().Sub(*s.LastAccessed)).Seconds())
+// Session.Metadata keys reserved by idauth.
+const (
+	SessionMetaProviderID = "provider_id"
+	SessionMetaIDToken    = "id_token"
+)
+
+type Session struct {
+	ID              string
+	State           string
+	Code            string
+	Subject         string
+	FirstName       string
+	LastName        string
+	Email           string
+	PhoneNumber     string
+	Role            *RoleEntity
+	Specialty       string
+	ValidDateTill   *time.Time
+	Scope           []string
+	LastAccessed    *time.Time
+	Roles           []*RoleEntity
+	Rights          []*GrantedRightListEntity
+	IsServiceClient bool
+	Device          *DeviceEntity
+	Metadata        map[string]string
+	IsTOSAccepted   bool
+}
+
+func GetSecondsToLive(sessionTimeout time.Duration, lastAccessed *time.Time) int {
+	if lastAccessed == nil {
+		return -1
+	}
+
+	return int((sessionTimeout - time.Now().UTC().Sub(*lastAccessed)).Seconds())
 }
 
 // IsActive returns true if session is active.
@@ -37,6 +58,16 @@ func (s *Session) IsActive() bool {
 // IsAuthorized returns true if session is authorized.
 func (s *Session) IsAuthorized() bool {
 	return s.IsActive() && s.State == string(SessionStateAuthorized)
+}
+
+// IsTOSRequired returns true if Terms of Service acceptance is required.
+func (s *Session) IsTOSRequired(requireTOS bool) bool {
+	return requireTOS && s.IsActive() && !s.IsTOSAccepted
+}
+
+// IsRoleRequired returns true if session requires role selection.
+func (s *Session) IsRoleRequired() bool {
+	return s.IsActive() && s.State == string(SessionStateRequireRole)
 }
 
 // Scopes returns merged session and role scopes.
@@ -55,11 +86,14 @@ func (s *Session) Scopes() []string {
 
 func (s *Session) ToClaims() map[string]token.ClaimStrings {
 	claims := map[string]token.ClaimStrings{
-		"sid":         {s.ID},
-		"sub":         {s.Subject},
-		"given_name":  {s.FirstName},
-		"family_name": {s.LastName},
-		"scope":       s.Scope,
+		"sid":               {s.ID},
+		"sub":               {s.Subject},
+		"code":              {s.Code},
+		"given_name":        {s.FirstName},
+		"family_name":       {s.LastName},
+		"scope":             s.Scope,
+		"is_service_client": {strconv.FormatBool(s.IsServiceClient)},
+		"is_tos_accepted":   {strconv.FormatBool(s.IsTOSAccepted)},
 	}
 
 	if s.Role != nil && s.Role.Organization != nil {
@@ -78,6 +112,12 @@ type SessionStore interface {
 	GetSessionByID(ctx *azugo.Context, sessionId string) (*Session, error)
 	Extend(ctx *azugo.Context, sessionId string) (*Session, error)
 	Delete(ctx *azugo.Context, sessionId string) error
+	StoreStart(app *azugo.App) error
+	StoreStop()
+	DeleteExpiredSessions(ctx context.Context, sessionTimeout time.Duration) error
+	GetUserSessions(ctx *azugo.Context, code string, sessionId string) (*SessionsResponse, error)
+	DeleteUserSession(ctx *azugo.Context, sessionId string) error
+	GetSessions(ctx *azugo.Context) ([]*Session, error)
 }
 
 // SessionState represents the session state.
@@ -137,6 +177,8 @@ type RoleBasic struct {
 	System bool `json:"system,omitempty" example:"true"`
 	// AppURL is the URL of selected role's application
 	AppURL string `json:"appUrl"`
+	// DataScopes is the list of data scopes assigned to the role.
+	DataScopes []*DataScopes `json:"data_scopes,omitempty"`
 }
 
 // SessionResponse is the response body for the session data
@@ -174,6 +216,17 @@ type SessionResponse struct {
 	Email *string `json:"email,omitempty" example:"jancigs.testins@test-organization.xx"`
 	// Phone is the phone number of the user's position.
 	Phone *string `json:"phone,omitempty" example:"+37100000000"`
+	// Phone number of the user's position.
+	PhoneNumber string `json:"phone_number,omitempty" example:"+37100000000"` // For compatibility with lx/ui where phone_number is expected in useAuthStore.js
+	// IsServiceClient indicates if the session is a service client session.
+	IsServiceClient bool `json:"is_service_client" example:"false"`
+	// IsServiceClient indicates if the session is a service client session.
+	IsTOSAccepted *bool `json:"is_tos_accepted" example:"false"`
+}
+
+type SessionsResponse struct {
+	List  []*Session `json:"list"`
+	Count int        `json:"count"`
 }
 
 // UserOrganizationResponse is the response body for the organization data user has access to.
@@ -199,6 +252,14 @@ type UserOrganizationRole struct {
 	Phone *string `json:"phone,omitempty" example:"+37100000000"`
 	// AppURL is the URL of selected role's application
 	AppURL string `json:"appUrl,omitempty" example:"https://example.com"`
+	// DataScopes is the list of data scopes assigned to the role.
+	DataScopes []*DataScopes `json:"data_scopes,omitempty"`
 }
 
 type UserOrganizationRoleResponse []UserOrganizationRole
+
+type AccessTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}

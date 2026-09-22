@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/nobid-lsp-latvia/lx-idauth/app"
+	"github.com/lx-lib/lx-idauth/app"
 
 	"azugo.io/core/server"
 	"github.com/spf13/cobra"

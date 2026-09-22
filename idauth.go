@@ -7,8 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
-	"github.com/nobid-lsp-latvia/lx-idauth/core/auth"
+	jsondb "github.com/lx-lib/lx-go-jsondb"
+	"github.com/lx-lib/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core/auth"
+	"github.com/lx-lib/lx-idauth/httpx"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/user"
@@ -20,11 +22,18 @@ type Configuration struct {
 	IntrospectionURL           string
 	IntrospectionClientID      string
 	IntrospectionClientSecret  string
+	IAMIssuer                  string
+	IAMJWKSURL                 string
 	SessionTimeout             time.Duration
 	SessionCountdown           time.Duration
 	AuthorizerRestAPIKey       string
+	AuthorizerRequiresTOS      bool
+	TOSEndpoint                string
 	SessionRequiresRole        bool
 	UsesAuthorizationCodeGrant bool
+	UsesIAMGrant               bool
+	UsesPfasGrant              bool
+	Postgres                   *jsondb.Configuration
 }
 
 type IDAuthConfig interface {
@@ -157,28 +166,52 @@ func (a *IDAuth) Bind(r azugo.Router) {
 	// Metadata endpoint.
 	r.Get("/.well-known/oauth-authorization-server", a.metadata())
 
-	r.Post("/token", a.token)
+	r.Post("/token", httpx.NoStore(a.token))
 	r.Get("/authorize", a.authorize)
 	r.Get("/callback/{id}", a.callback)
 	r.Post("/callback/{id}", a.callback)
+	r.Get("/oidc/logout/callback", a.oidcLogoutCallback)
+	r.Post("/oidc/logout/callback", a.oidcLogoutCallback)
 
 	webhooks := r.Group("/webhooks")
 	webhooks.Use(AuthorizeStaticToken(a))
 	webhooks.Post("/clients/reload", a.clientsReload)
 
+	adminApi := r.Group("/admin-api/1.0")
+	adminApi.Use(AuthorizeStaticToken(a))
+	adminApi.Use(httpx.NoStore)
+	adminApi.Post("/sessions", a.getSessions)
+	adminApi.Delete("/sessions/{id}", a.deleteUsersSession)
+
 	r.Use(AuthorizeBearer(a))
-	r = r.Group("/api/1.0")
-	r.Get("/session", a.getSession)
-	r.Get("/session/keep-alive", a.extendSession)
-	r.Get("/session/roles", a.getSessionAvailableRoles)
-	r.Patch("/session", a.setSessionRole)
-	r.Delete("/session", a.deleteSession)
-	r.Get("/config", a.getConfigValues)
+	api := r.Group("/api/1.0")
+	api.Use(httpx.NoStore)
+
+	preAuthorized := api.Group("")
+	preAuthorized.Get("/session", a.getSession)
+	preAuthorized.Delete("/session", a.deleteSession)
+	preAuthorized.Patch("/terms/accept", a.termsAccept)
+	preAuthorized.Get("/session/keep-alive", a.extendSession)
+
+	tosRequired := preAuthorized.Group("")
+	tosRequired.Use(RequireTOSAccepted(a))
+	tosRequired.Get("/session/roles", a.getSessionAvailableRoles)
+	tosRequired.Patch("/session", a.setSessionRole)
+
+	secured := api.Group("")
+	secured.Use(RequireAuthorized())
+	secured.Get("/config", a.getConfigValues)
+	secured.Get("/auth/sessions", a.getUserSessions)
+	secured.Delete("/auth/sessions/{id}", a.deleteUserSession)
 }
 
-// RedirectToCaller redirects to the client with the code.
 func (a *IDAuth) RedirectToCaller(ctx *azugo.Context, sess *core.Correlation) error {
-	returnURL, err := url.Parse(sess.RedirectURI)
+	dest := sess.RedirectURI
+	if sess.TOSTargetURI != nil && len(*sess.TOSTargetURI) > 0 {
+		dest = *sess.TOSTargetURI
+	}
+
+	returnURL, err := url.Parse(dest)
 	if err != nil {
 		a.app.Log().Error("parsing redirect URI", zap.Error(err))
 		return err
@@ -204,7 +237,7 @@ func (a *IDAuth) RedirectToCaller(ctx *azugo.Context, sess *core.Correlation) er
 
 	_ = a.correlationStore.Delete(ctx)
 
-	ctx.Redirect(returnURL.String())
+	ctx.RedirectUnsafe(returnURL.String())
 	return nil
 }
 
@@ -240,6 +273,59 @@ func AuthorizeBearer(a *IDAuth) func(azugo.RequestHandler) azugo.RequestHandler 
 
 			ctx.SetUserValue(SessionUserValueKey, session)
 			ctx.SetUser(user.New(session.ToClaims()))
+			h(ctx)
+		}
+	}
+}
+
+// RequireAuthorized ensures the session is fully authorized for the protected endpoints.
+func RequireAuthorized() func(azugo.RequestHandler) azugo.RequestHandler {
+	return func(h azugo.RequestHandler) azugo.RequestHandler {
+		return func(ctx *azugo.Context) {
+			sessVal := ctx.UserValue(SessionUserValueKey)
+			if sessVal == nil {
+				ctx.StatusCode(fasthttp.StatusUnauthorized)
+				ctx.JSON(&auth.AuthorizeError{Code: auth.AuthErrNoSession, Message: "Session not found"})
+				return
+			}
+			session := sessVal.(*core.Session)
+			if !session.IsAuthorized() {
+				ctx.StatusCode(fasthttp.StatusUnauthorized)
+				ctx.JSON(&auth.AuthorizeError{Code: auth.AuthErrInvalidToken, Message: "Session not authorized"})
+				return
+			}
+
+			h(ctx)
+		}
+	}
+}
+
+func RequireTOSAccepted(a *IDAuth) func(azugo.RequestHandler) azugo.RequestHandler {
+	return func(h azugo.RequestHandler) azugo.RequestHandler {
+		return func(ctx *azugo.Context) {
+			if !a.config.ExposedConfig().AuthorizerRequiresTOS {
+				h(ctx)
+				return
+			}
+
+			sessVal := ctx.UserValue(SessionUserValueKey)
+			if sessVal == nil {
+				ctx.JSON(&auth.AuthorizeError{
+					Code:    auth.AuthErrNoSession,
+					Message: "Session not found",
+				})
+				return
+			}
+
+			session := sessVal.(*core.Session)
+			if !session.IsTOSAccepted {
+				ctx.JSON(&auth.AuthorizeError{
+					Code:    auth.AuthErrTermsNotAccepted,
+					Message: "Terms of Service not accepted",
+				})
+				return
+			}
+
 			h(ctx)
 		}
 	}

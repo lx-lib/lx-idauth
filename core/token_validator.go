@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,18 +11,23 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core/auth"
+	"github.com/lx-lib/lx-idauth/core/auth"
 
 	"azugo.io/azugo"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/valyala/fasthttp"
 )
 
 const (
+	AuthorizationBasic  = "basic"
 	AuthorizationBearer = "bearer"
 
-	TOKEN_TYPE_BASIC = "basic"
-	TOKEN_TYPE_PFAS  = "pfas"
+	GRANT_TYPE_BASIC              = "basic"
+	GRANT_TYPE_CLIENT_CREDENTIALS = "client_credentials"
+	GRANT_TYPE_IAM                = "iam"
+	GRANT_TYPE_PFAS               = "pfas"
 )
 
 type TokenValidationResult struct {
@@ -36,19 +42,32 @@ type TokenValidator interface {
 	ValidateToken(ctx *azugo.Context) (*TokenValidationResult, error)
 }
 
-func NewTokenValidator(tokenType string, clientStore ClientStore, pfasConfig *PfasAuthTokenValidatorConfig) TokenValidator {
-	switch tokenType {
-	case TOKEN_TYPE_BASIC:
+func NewTokenValidator(grantType string, clientStore ClientStore, pfasConfig *PfasAuthTokenValidatorConfig, iamConfig *IAMAuthTokenValidatorConfig) (TokenValidator, error) {
+	switch grantType {
+	case GRANT_TYPE_BASIC:
+		// Fallback for requests that still use "basic" grant type instead of "client_credentials"
+		fallthrough
+	case GRANT_TYPE_CLIENT_CREDENTIALS:
 		return &BasicAuthTokenValidator{
 			clientStore: clientStore,
+		}, nil
+	case GRANT_TYPE_PFAS:
+		if pfasConfig == nil {
+			return nil, errors.New("pfas token validator config is required")
 		}
-	case TOKEN_TYPE_PFAS:
+
 		return &PfasAuthTokenValidator{
 			clientStore: clientStore,
 			config:      pfasConfig,
+		}, nil
+	case GRANT_TYPE_IAM:
+		if iamConfig == nil {
+			return nil, errors.New("iam token validator config is required")
 		}
+
+		return NewIAMAuthTokenValidator(clientStore, iamConfig), nil
 	default:
-		return &NoopTokenValidator{}
+		return &NoopTokenValidator{}, nil
 	}
 }
 
@@ -73,7 +92,7 @@ func (v *BasicAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValid
 		ClientID:     *clientID,
 		ClientSecret: clientSecret,
 		Scope:        scope,
-		GrantType:    TOKEN_TYPE_BASIC,
+		GrantType:    GRANT_TYPE_CLIENT_CREDENTIALS,
 	}); err != nil {
 		ctx.StatusCode(fasthttp.StatusUnauthorized)
 		return nil, err
@@ -87,7 +106,7 @@ func (v *BasicAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValid
 }
 
 func (v *BasicAuthTokenValidator) getBasicAuthCredentials(ctx *azugo.Context) (*string, *string, error) {
-	decoded, err := base64.StdEncoding.DecodeString(parseBearerToken(ctx))
+	decoded, err := base64.StdEncoding.DecodeString(parseBasicToken(ctx))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -105,9 +124,32 @@ type PfasAuthTokenValidatorConfig struct {
 	IntrospectionClientId     string `mapstructure:"introspection_client_id" validate:"required"`
 	IntrospectionClientSecret string `mapstructure:"introspection_client_secret" validate:"required"`
 }
+
 type PfasAuthTokenValidator struct {
 	clientStore ClientStore
 	config      *PfasAuthTokenValidatorConfig
+}
+
+type IAMAuthTokenValidatorConfig struct {
+	Issuer  string `mapstructure:"iam_issuer" validate:"required"`
+	JWKSURL string `mapstructure:"iam_jwks_url" validate:"required,url"`
+}
+
+type oidcTokenVerifier interface {
+	Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error)
+}
+
+type IAMAuthTokenValidator struct {
+	clientStore ClientStore
+	config      *IAMAuthTokenValidatorConfig
+	verifier    oidcTokenVerifier
+}
+
+type IAMTokenClaims struct {
+	ClientID  string `json:"client_id"`
+	ExpiresAt int64  `json:"exp"`
+	IssuedAt  int64  `json:"iat"`
+	NotBefore int64  `json:"nbf"`
 }
 
 type IntrospectionResponse struct {
@@ -128,6 +170,17 @@ type IntrospectionResponse struct {
 	LegalEntity  string `json:"legalentity"`
 	NameIdFormat string `json:"nameidformat"`
 	AuthMethod   string `json:"arm"`
+}
+
+func NewIAMAuthTokenValidator(clientStore ClientStore, config *IAMAuthTokenValidatorConfig) *IAMAuthTokenValidator {
+	keySet := oidc.NewRemoteKeySet(context.Background(), config.JWKSURL)
+	verifier := oidc.NewVerifier(config.Issuer, keySet, &oidc.Config{SkipClientIDCheck: true})
+
+	return &IAMAuthTokenValidator{
+		clientStore: clientStore,
+		config:      config,
+		verifier:    verifier,
+	}
 }
 
 func (v *PfasAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValidationResult, error) {
@@ -169,7 +222,7 @@ func (v *PfasAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValida
 		ClientID:     parsedClientID,
 		ClientSecret: nil,
 		Scope:        scope,
-		GrantType:    TOKEN_TYPE_PFAS,
+		GrantType:    GRANT_TYPE_PFAS,
 	}); err != nil {
 		return nil, err
 	}
@@ -180,6 +233,87 @@ func (v *PfasAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValida
 		ClientName:  &introspectionResp.Username,
 		LegalEntity: &introspectionResp.LegalEntity,
 	}, nil
+}
+
+func (v *IAMAuthTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValidationResult, error) {
+	token := parseBearerToken(ctx)
+	if token == "" {
+		return nil, &auth.AuthorizeError{
+			Code:    auth.AuthErrNoToken,
+			Message: "Missing authorization token",
+		}
+	}
+
+	return v.validateToken(ctx, token)
+}
+
+func (v *IAMAuthTokenValidator) validateToken(ctx context.Context, token string) (*TokenValidationResult, error) {
+	verifiedToken, err := v.verifier.Verify(ctx, token)
+	if err != nil {
+		return nil, &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "Invalid token",
+		}
+	}
+
+	var claims IAMTokenClaims
+	if err := verifiedToken.Claims(&claims); err != nil {
+		return nil, &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "Invalid token claims",
+		}
+	}
+
+	if err := validateIAMTokenClaims(&claims, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+
+	if err := v.clientStore.ValidateCredentials(&ClientCredentials{
+		ClientID:     claims.ClientID,
+		ClientSecret: nil,
+		Scope:        nil,
+		GrantType:    GRANT_TYPE_IAM,
+	}); err != nil {
+		return nil, err
+	}
+
+	return &TokenValidationResult{
+		Valid:    true,
+		ClientID: claims.ClientID,
+	}, nil
+}
+
+func validateIAMTokenClaims(claims *IAMTokenClaims, now time.Time) error {
+	if strings.TrimSpace(claims.ClientID) == "" {
+		return &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "client_id claim is required",
+		}
+	}
+
+	nowUnix := now.Unix()
+	if claims.ExpiresAt == 0 || nowUnix >= claims.ExpiresAt {
+		return &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "Token has expired",
+		}
+	}
+
+	if claims.NotBefore != 0 && nowUnix < claims.NotBefore {
+		return &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "Token is not valid yet",
+		}
+	}
+
+	if claims.IssuedAt != 0 && nowUnix < claims.IssuedAt {
+		return &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidToken,
+			Message: "Token was issued in the future",
+		}
+	}
+
+	return nil
 }
 
 func (v *PfasAuthTokenValidator) introspectToken(ctx *azugo.Context, token string) (*IntrospectionResponse, error) {
@@ -230,6 +364,15 @@ func (v *NoopTokenValidator) ValidateToken(ctx *azugo.Context) (*TokenValidation
 	return &TokenValidationResult{
 		Valid: false,
 	}, nil
+}
+
+func parseBasicToken(ctx *azugo.Context) string {
+	token := ctx.Header.Get("Authorization")
+	if len(token) == 0 || strings.ToLower(token) == "basic null" || !strings.HasPrefix(strings.ToLower(token), AuthorizationBasic) {
+		return ""
+	}
+
+	return strings.TrimSpace(token[len(AuthorizationBasic):])
 }
 
 func parseBearerToken(ctx *azugo.Context) string {

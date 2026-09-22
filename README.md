@@ -18,6 +18,8 @@ Supported authentication providers:
 
 For a more in-depth guide on how to set up IDAuth with other providers, like Google or Azure AD, see the [PROVIDERS.md](PROVIDERS.md) file.
 
+Provider claim mapping can be customized for each provider by setting a `claim_mapping_file` (Jsonnet). Example mappings are available in `.config/mappings/`.
+
 ## Run out-of-the-box with Docker
 
 1. Create config files for idauth clients and authentication providers. You can use the provided examples in .config directory.
@@ -30,7 +32,7 @@ For a more in-depth guide on how to set up IDAuth with other providers, like Goo
 1. Run the application with Docker
 
     ```bash
-    docker run -p 8080:8080 -v ${pwd}/.config:/.config github.com/nobid-lsp-latvia/lx-idauth:develop
+    docker run -p 8080:8080 -v ${pwd}/.config:/.config github.com/lx-lib/lx-idauth:develop
     ```
 
 ## Use as library
@@ -38,7 +40,7 @@ For a more in-depth guide on how to set up IDAuth with other providers, like Goo
 If you need to have custom logic for session storage, configuration storage or authentication provider, you can use the library as a dependency.
 
 ```go
-import "github.com/nobid-lsp-latvia/lx-idauth"
+import "github.com/lx-lib/lx-idauth"
 
 func main() {
     // Create a new IDAuth instance
@@ -65,7 +67,7 @@ func main() {
 version: '3.7'
 services:
   idauth:
-    image: github.com/nobid-lsp-latvia/lx-idauth:develop
+    image: github.com/lx-lib/lx-idauth:develop
     environment:
       AUTH_PROVIDER_STORE_FILE: ".config/providers.yaml"
       AUTHORIZER_REST_API_KEY_FILE: "idauth_authorizer_api_key"
@@ -95,6 +97,13 @@ configs:
 ### REST API Authorizer
 
 REST API Authorizer is a service that provides user lookup after authentication. It is used to authorize the user based on the token provided by the authentication provider.
+
+For service-to-service token exchange, IDAuth supports two parallel grant paths on `POST /token`:
+
+- `grant_type=pfas` validates an upstream bearer token through the configured introspection endpoint.
+- `grant_type=iam` validates an upstream IAM JWT against the configured issuer and JWKS endpoint.
+
+Both flows then resolve the local user or service identity through the authorizer and return an internal IDAuth bearer token backed by an IDAuth session.
 
 The authorizer should have the following endpoints:
 

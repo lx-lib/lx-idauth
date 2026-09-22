@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core/auth"
+	"github.com/lx-lib/lx-idauth/core/auth"
 
 	"azugo.io/azugo"
 	"azugo.io/core/validation"
@@ -147,6 +147,11 @@ func (s *CompositeClientStore) ValidateCredentials(credentials *ClientCredential
 		}
 	}
 
+	// Fallback for clients that still have "basic" grant type instead of "client_credentials"
+	if slices.Contains(client.GrantTypes, GRANT_TYPE_BASIC) && !slices.Contains(client.GrantTypes, GRANT_TYPE_CLIENT_CREDENTIALS) {
+		client.GrantTypes = append(client.GrantTypes, GRANT_TYPE_CLIENT_CREDENTIALS)
+	}
+
 	if !slices.Contains(client.GrantTypes, credentials.GrantType) {
 		return &auth.AuthorizeError{
 			Code:    auth.AuthErrInvalidRequest,
@@ -166,10 +171,16 @@ func (s *CompositeClientStore) ValidateCredentials(credentials *ClientCredential
 		}
 	}
 
-	// pfas validation doesn't rely on a client secret.
-	// Maybe a custom handler for each type would be prettier but seems like overkill
-	if client != nil && credentials.GrantType == "pfas" {
+	// Service-token grants are validated by the upstream issuer and local client allowlist.
+	if grantTypeSkipsClientSecret(credentials.GrantType) {
 		return nil
+	}
+
+	if credentials.ClientSecret == nil {
+		return &auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidClient,
+			Message: "Invalid client secret",
+		}
 	}
 
 	for _, secret := range client.Secrets {
@@ -182,6 +193,10 @@ func (s *CompositeClientStore) ValidateCredentials(credentials *ClientCredential
 		Code:    auth.AuthErrInvalidClient,
 		Message: "Invalid client secret",
 	}
+}
+
+func grantTypeSkipsClientSecret(grantType string) bool {
+	return grantType == GRANT_TYPE_PFAS || grantType == GRANT_TYPE_IAM
 }
 
 func (s *fileSource) LoadClients() ([]Client, error) {

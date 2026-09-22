@@ -1,10 +1,10 @@
 package app
 
 import (
-	"crypto/rand"
 	"time"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core/util"
 
 	"azugo.io/azugo"
 	"azugo.io/core/cache"
@@ -16,8 +16,7 @@ const ottCache = "idauth-ott"
 
 // OTTStore manages the generation and exchange of one-time tokens.
 type OTTStore struct {
-	ch      cache.Instance[*core.OneTimeToken]
-	entropy *ulid.MonotonicEntropy
+	ch cache.Instance[*core.OneTimeToken]
 }
 
 // NewAzugoCacheOOTStore creates a new One Time Token store in order to generate and exchange one time tokens.
@@ -31,25 +30,28 @@ func NewAzugoCacheOOTStore(app *azugo.App) (*OTTStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	sid.entropy = ulid.Monotonic(rand.Reader, 0)
 	return sid, nil
 }
 
 // GenerateToken creates a new one-time token and associates it with the given value.
 func (st *OTTStore) GenerateToken(ctx *azugo.Context, session *core.Correlation) (*core.OneTimeToken, error) {
-	ottULID, err := ulid.New(ulid.Timestamp(time.Now().UTC()), st.entropy)
-	if err != nil {
-		return nil, err
-	}
+	ottULID := ulid.Make()
 	ott := ottULID.String()
+
+	redirectURIs := []string{session.RedirectURI}
+
 	oneTimeToken := &core.OneTimeToken{
-		ID:           ott,
-		RedirectURI:  session.RedirectURI,
-		SessionToken: session.ID,
+		ID:             ott,
+		RedirectURI:    session.RedirectURI,
+		RedirectURIs:   redirectURIs,
+		SessionToken:   session.ID,
+		SessionCreated: util.CloneTimePtr(session.SessionCreated),
 	}
+
 	if err := st.ch.Set(ctx, ott, oneTimeToken); err != nil {
 		return nil, err
 	}
+
 	return oneTimeToken, nil
 }
 

@@ -6,3 +6,4 @@ cmd/server/__debug_bin*
 swagger.json
 /vendor
 .idea
+.config/mappings/*.jsonnet

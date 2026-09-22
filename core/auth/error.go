@@ -7,20 +7,21 @@ import (
 type AuthErrCode string
 
 const (
-	AuthErrInvalidCallback AuthErrCode = "invalid_callback"
-	AuthErrCanceled        AuthErrCode = "canceled"
-	AuthErrInvalidToken    AuthErrCode = "invalid_token"
-	AuthErrInvalidScope    AuthErrCode = "invalid_scope"
-	AuthErrServer          AuthErrCode = "server_error"
-	AuthErrInvalidClient   AuthErrCode = "invalid_client"
-	AuthErrNoSession       AuthErrCode = "no_session"
-	AuthErrNoRights        AuthErrCode = "invalid_rights"
-	AuthErrBlocked         AuthErrCode = "blocked"
-	AuthErrAnnulled        AuthErrCode = "annulled"
-	AuthErrUserNotExists   AuthErrCode = "user_not_exists"
-	AuthErrMultipleUsers   AuthErrCode = "multiple_users"
-	AuthErrInvalidRequest  AuthErrCode = "invalid_request"
-	AuthErrNoToken         AuthErrCode = "no_token"
+	AuthErrInvalidCallback  AuthErrCode = "invalid_callback"
+	AuthErrCanceled         AuthErrCode = "canceled"
+	AuthErrInvalidToken     AuthErrCode = "invalid_token"
+	AuthErrInvalidScope     AuthErrCode = "invalid_scope"
+	AuthErrTermsNotAccepted AuthErrCode = "terms_not_accepted"
+	AuthErrServer           AuthErrCode = "server_error"
+	AuthErrInvalidClient    AuthErrCode = "invalid_client"
+	AuthErrNoSession        AuthErrCode = "no_session"
+	AuthErrNoRights         AuthErrCode = "invalid_rights"
+	AuthErrBlocked          AuthErrCode = "blocked"
+	AuthErrAnnulled         AuthErrCode = "annulled"
+	AuthErrUserNotExists    AuthErrCode = "user_not_exists"
+	AuthErrMultipleUsers    AuthErrCode = "multiple_users"
+	AuthErrInvalidRequest   AuthErrCode = "invalid_request"
+	AuthErrNoToken          AuthErrCode = "no_token"
 )
 
 var ErrorMap = map[string]AuthErrCode{
@@ -52,7 +53,8 @@ func (e *AuthorizeError) StatusCode() int {
 		e.Code == AuthErrUserNotExists ||
 		e.Code == AuthErrNoSession ||
 		e.Code == AuthErrNoToken ||
-		e.Code == AuthErrInvalidClient {
+		e.Code == AuthErrInvalidClient ||
+		e.Code == AuthErrTermsNotAccepted {
 		return fasthttp.StatusUnauthorized
 	}
 	if e.Code == AuthErrServer {

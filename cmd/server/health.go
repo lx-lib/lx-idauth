@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/app"
+	"github.com/lx-lib/lx-idauth/app"
 
 	"github.com/spf13/cobra"
 	"github.com/valyala/fasthttp"

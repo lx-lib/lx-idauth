@@ -26,18 +26,19 @@ type Empty = interface{}
 
 // GetAuditEventListRequest defines model for GetAuditEventListRequest.
 type GetAuditEventListRequest struct {
-	EventCode          *string `json:"eventCode,omitempty"`
-	EventTimestampFrom *string `json:"eventTimestampFrom,omitempty"`
-	EventTimestampTo   *string `json:"eventTimestampTo,omitempty"`
-	EventType          *string `json:"eventType,omitempty"`
-	Page               *int    `json:"page,omitempty"`
-	PerPage            *int    `json:"perPage,omitempty"`
-	RequestUrl         *string `json:"requestUrl,omitempty"`
-	ServerIdentifier   *string `json:"serverIdentifier,omitempty"`
-	UserId             *string `json:"userId,omitempty"`
-	UserIp             *string `json:"userIp,omitempty"`
-	UserOrganizationId *string `json:"userOrganizationId,omitempty"`
-	UserPersonCode     *string `json:"userPersonCode,omitempty"`
+	EventCode            *string `json:"eventCode,omitempty"`
+	EventTimestampFrom   *string `json:"eventTimestampFrom,omitempty"`
+	EventTimestampTo     *string `json:"eventTimestampTo,omitempty"`
+	EventType            *string `json:"eventType,omitempty"`
+	Justification        *string `json:"justification,omitempty"`
+	Page                 *int    `json:"page,omitempty"`
+	PerPage              *int    `json:"perPage,omitempty"`
+	RequestUrl           *string `json:"requestUrl,omitempty"`
+	ServerIdentifier     *string `json:"serverIdentifier,omitempty"`
+	UserCode             *string `json:"userCode,omitempty"`
+	UserId               *string `json:"userId,omitempty"`
+	UserIp               *string `json:"userIp,omitempty"`
+	UserOrganizationName *string `json:"userOrganizationName,omitempty"`
 }
 
 // GetAuditItemsExportRequest defines model for GetAuditItemsExportRequest.
@@ -46,29 +47,36 @@ type GetAuditItemsExportRequest struct {
 	EventTimestampFrom *string `json:"eventTimestampFrom,omitempty"`
 	EventTimestampTo   *string `json:"eventTimestampTo,omitempty"`
 	EventType          *string `json:"eventType,omitempty"`
+	Justification      *string `json:"justification,omitempty"`
 	RequestUrl         *string `json:"requestUrl,omitempty"`
 	ServerIdentifier   *string `json:"serverIdentifier,omitempty"`
+	UserCode           *string `json:"userCode,omitempty"`
 	UserId             *string `json:"userId,omitempty"`
 	UserIp             *string `json:"userIp,omitempty"`
 	UserOrganizationId *string `json:"userOrganizationId,omitempty"`
-	UserPersonCode     *string `json:"userPersonCode,omitempty"`
 }
 
 // GetPersonAuditEventListRequest defines model for GetPersonAuditEventListRequest.
 type GetPersonAuditEventListRequest struct {
-	EventCode          *string `json:"eventCode,omitempty"`
-	EventTimestampFrom *string `json:"eventTimestampFrom,omitempty"`
-	EventTimestampTo   *string `json:"eventTimestampTo,omitempty"`
-	EventType          *string `json:"eventType,omitempty"`
-	Page               *int    `json:"page,omitempty"`
-	PerPage            *int    `json:"perPage,omitempty"`
-	PersonCode         *string `json:"personCode,omitempty"`
-	RequestUrl         *string `json:"requestUrl,omitempty"`
-	ServerIdentifier   *string `json:"serverIdentifier,omitempty"`
-	UserId             *string `json:"userId,omitempty"`
-	UserIp             *string `json:"userIp,omitempty"`
-	UserOrganizationId *string `json:"userOrganizationId,omitempty"`
-	UserPersonCode     *string `json:"userPersonCode,omitempty"`
+	EventCode            *string `json:"eventCode,omitempty"`
+	EventTimestampFrom   *string `json:"eventTimestampFrom,omitempty"`
+	EventTimestampTo     *string `json:"eventTimestampTo,omitempty"`
+	EventType            *string `json:"eventType,omitempty"`
+	Justification        *string `json:"justification,omitempty"`
+	Page                 *int    `json:"page,omitempty"`
+	PerPage              *int    `json:"perPage,omitempty"`
+	PersonCode           *string `json:"personCode,omitempty"`
+	RequestUrl           *string `json:"requestUrl,omitempty"`
+	ServerIdentifier     *string `json:"serverIdentifier,omitempty"`
+	UserCode             *string `json:"userCode,omitempty"`
+	UserId               *string `json:"userId,omitempty"`
+	UserIp               *string `json:"userIp,omitempty"`
+	UserOrganizationName *string `json:"userOrganizationName,omitempty"`
+}
+
+// GetPersonAuditItemRequest defines model for GetPersonAuditItemRequest.
+type GetPersonAuditItemRequest struct {
+	Justification *string `json:"justification,omitempty"`
 }
 
 // GetPersonAuditItemsExportRequest defines model for GetPersonAuditItemsExportRequest.
@@ -77,13 +85,14 @@ type GetPersonAuditItemsExportRequest struct {
 	EventTimestampFrom *string `json:"eventTimestampFrom,omitempty"`
 	EventTimestampTo   *string `json:"eventTimestampTo,omitempty"`
 	EventType          *string `json:"eventType,omitempty"`
+	Justification      *string `json:"justification,omitempty"`
 	PersonCode         *string `json:"personCode,omitempty"`
 	RequestUrl         *string `json:"requestUrl,omitempty"`
 	ServerIdentifier   *string `json:"serverIdentifier,omitempty"`
+	UserCode           *string `json:"userCode,omitempty"`
 	UserId             *string `json:"userId,omitempty"`
 	UserIp             *string `json:"userIp,omitempty"`
 	UserOrganizationId *string `json:"userOrganizationId,omitempty"`
-	UserPersonCode     *string `json:"userPersonCode,omitempty"`
 }
 
 // DeleteAuditEventsParams defines parameters for DeleteAuditEvents.
@@ -102,6 +111,8 @@ type SaveAuditEventJSONBody = []struct {
 	EventSuccessful  *bool      `json:"eventSuccessful,omitempty"`
 	EventTimestamp   *time.Time `json:"eventTimestamp,omitempty"`
 	EventType        *string    `json:"eventType,omitempty"`
+	IsApiUser        *bool      `json:"isApiUser,omitempty"`
+	Justification    *string    `json:"justification,omitempty"`
 	PersonAuditData  *[]struct {
 		FullName   *string `json:"fullName,omitempty"`
 		PersonCode *string `json:"personCode,omitempty"`
@@ -111,13 +122,13 @@ type SaveAuditEventJSONBody = []struct {
 	ResponseContent      *string `json:"responseContent,omitempty"`
 	ServerIdentifier     *string `json:"serverIdentifier,omitempty"`
 	TransactionId        *string `json:"transactionId,omitempty"`
+	UserCode             *string `json:"userCode,omitempty"`
 	UserFullName         *string `json:"userFullName,omitempty"`
 	UserId               *string `json:"userId,omitempty"`
 	UserIp               *string `json:"userIp,omitempty"`
 	UserOrganizationCode *string `json:"userOrganizationCode,omitempty"`
 	UserOrganizationId   *string `json:"userOrganizationId,omitempty"`
 	UserOrganizationName *string `json:"userOrganizationName,omitempty"`
-	UserPersonCode       *string `json:"userPersonCode,omitempty"`
 	UserRight            *string `json:"userRight,omitempty"`
 	UserRightsLevel      *int    `json:"userRightsLevel,omitempty"`
 	UserRoleId           *string `json:"userRoleId,omitempty"`
@@ -145,6 +156,9 @@ type GetPersonAuditEventListJSONRequestBody = GetPersonAuditEventListRequest
 
 // PostApi10PersonListExportJSONRequestBody defines body for PostApi10PersonListExport for application/json ContentType.
 type PostApi10PersonListExportJSONRequestBody = GetPersonAuditItemsExportRequest
+
+// GetPersonAuditItemWithBodyJSONRequestBody defines body for GetPersonAuditItemWithBody for application/json ContentType.
+type GetPersonAuditItemWithBodyJSONRequestBody = GetPersonAuditItemRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -252,6 +266,11 @@ type ClientInterface interface {
 
 	// GetPersonAuditItem request
 	GetPersonAuditItem(ctx context.Context, id int32, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetPersonAuditItemWithBodyWithBody request with any body
+	GetPersonAuditItemWithBodyWithBody(ctx context.Context, id int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	GetPersonAuditItemWithBody(ctx context.Context, id int32, body GetPersonAuditItemWithBodyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) DeleteAuditEvents(ctx context.Context, params *DeleteAuditEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -400,6 +419,30 @@ func (c *Client) PostApi10PersonListExport(ctx context.Context, body PostApi10Pe
 
 func (c *Client) GetPersonAuditItem(ctx context.Context, id int32, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetPersonAuditItemRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetPersonAuditItemWithBodyWithBody(ctx context.Context, id int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetPersonAuditItemWithBodyRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetPersonAuditItemWithBody(ctx context.Context, id int32, body GetPersonAuditItemWithBodyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetPersonAuditItemWithBodyRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -748,6 +791,53 @@ func NewGetPersonAuditItemRequest(server string, id int32) (*http.Request, error
 	return req, nil
 }
 
+// NewGetPersonAuditItemWithBodyRequest calls the generic GetPersonAuditItemWithBody builder with application/json body
+func NewGetPersonAuditItemWithBodyRequest(server string, id int32, body GetPersonAuditItemWithBodyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewGetPersonAuditItemWithBodyRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewGetPersonAuditItemWithBodyRequestWithBody generates requests for GetPersonAuditItemWithBody with any type of body
+func NewGetPersonAuditItemWithBodyRequestWithBody(server string, id int32, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/1.0/person-list/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -824,6 +914,11 @@ type ClientWithResponsesInterface interface {
 
 	// GetPersonAuditItemWithResponse request
 	GetPersonAuditItemWithResponse(ctx context.Context, id int32, reqEditors ...RequestEditorFn) (*GetPersonAuditItemResponse, error)
+
+	// GetPersonAuditItemWithBodyWithBodyWithResponse request with any body
+	GetPersonAuditItemWithBodyWithBodyWithResponse(ctx context.Context, id int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GetPersonAuditItemWithBodyResponse, error)
+
+	GetPersonAuditItemWithBodyWithResponse(ctx context.Context, id int32, body GetPersonAuditItemWithBodyJSONRequestBody, reqEditors ...RequestEditorFn) (*GetPersonAuditItemWithBodyResponse, error)
 }
 
 type DeleteAuditEventsResponse struct {
@@ -1000,6 +1095,28 @@ func (r GetPersonAuditItemResponse) StatusCode() int {
 	return 0
 }
 
+type GetPersonAuditItemWithBodyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Empty
+}
+
+// Status returns HTTPResponse.Status
+func (r GetPersonAuditItemWithBodyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetPersonAuditItemWithBodyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // DeleteAuditEventsWithResponse request returning *DeleteAuditEventsResponse
 func (c *ClientWithResponses) DeleteAuditEventsWithResponse(ctx context.Context, params *DeleteAuditEventsParams, reqEditors ...RequestEditorFn) (*DeleteAuditEventsResponse, error) {
 	rsp, err := c.DeleteAuditEvents(ctx, params, reqEditors...)
@@ -1110,6 +1227,23 @@ func (c *ClientWithResponses) GetPersonAuditItemWithResponse(ctx context.Context
 		return nil, err
 	}
 	return ParseGetPersonAuditItemResponse(rsp)
+}
+
+// GetPersonAuditItemWithBodyWithBodyWithResponse request with arbitrary body returning *GetPersonAuditItemWithBodyResponse
+func (c *ClientWithResponses) GetPersonAuditItemWithBodyWithBodyWithResponse(ctx context.Context, id int32, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GetPersonAuditItemWithBodyResponse, error) {
+	rsp, err := c.GetPersonAuditItemWithBodyWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetPersonAuditItemWithBodyResponse(rsp)
+}
+
+func (c *ClientWithResponses) GetPersonAuditItemWithBodyWithResponse(ctx context.Context, id int32, body GetPersonAuditItemWithBodyJSONRequestBody, reqEditors ...RequestEditorFn) (*GetPersonAuditItemWithBodyResponse, error) {
+	rsp, err := c.GetPersonAuditItemWithBody(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetPersonAuditItemWithBodyResponse(rsp)
 }
 
 // ParseDeleteAuditEventsResponse parses an HTTP response from a DeleteAuditEventsWithResponse call
@@ -1283,6 +1417,32 @@ func ParseGetPersonAuditItemResponse(rsp *http.Response) (*GetPersonAuditItemRes
 	}
 
 	response := &GetPersonAuditItemResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Empty
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetPersonAuditItemWithBodyResponse parses an HTTP response from a GetPersonAuditItemWithBodyWithResponse call
+func ParseGetPersonAuditItemWithBodyResponse(rsp *http.Response) (*GetPersonAuditItemWithBodyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetPersonAuditItemWithBodyResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}

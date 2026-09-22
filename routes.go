@@ -3,16 +3,17 @@ package idauth
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
-	"github.com/nobid-lsp-latvia/lx-idauth/core/auth"
-	"github.com/nobid-lsp-latvia/lx-idauth/core/util"
+	"github.com/lx-lib/lx-idauth/audit"
+	"github.com/lx-lib/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core/auth"
+	"github.com/lx-lib/lx-idauth/core/util"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/wsfed"
-	"github.com/google/uuid"
 	"github.com/oklog/ulid/v2"
 	"github.com/valyala/fasthttp"
 	"go.uber.org/zap"
@@ -27,7 +28,9 @@ func (a *IDAuth) token(ctx *azugo.Context) {
 
 	switch grantType {
 	case "client_credentials":
-		a.clientCredentials(ctx)
+		a.clientCredentials(ctx, core.GRANT_TYPE_CLIENT_CREDENTIALS)
+	case core.GRANT_TYPE_IAM:
+		a.clientCredentials(ctx, core.GRANT_TYPE_IAM)
 	case "authorization_code":
 		a.authorizationCode(ctx)
 	default:
@@ -35,16 +38,53 @@ func (a *IDAuth) token(ctx *azugo.Context) {
 	}
 }
 
-func (a *IDAuth) clientCredentials(ctx *azugo.Context, grantType ...string) {
-	if len(grantType) == 0 {
-		grantType = append(grantType, core.TOKEN_TYPE_BASIC)
+func (a *IDAuth) clientCredentials(ctx *azugo.Context, grantType string) {
+	var pfasConfig *core.PfasAuthTokenValidatorConfig
+	var iamConfig *core.IAMAuthTokenValidatorConfig
+
+	switch grantType {
+	case core.GRANT_TYPE_PFAS:
+		if !a.config.ExposedConfig().UsesPfasGrant {
+			ctx.StatusCode(fasthttp.StatusForbidden)
+			ctx.JSON(&auth.AuthorizeError{
+				Code:    auth.AuthErrInvalidRequest,
+				Message: "PFAS grant is not enabled",
+			})
+			return
+		}
+	case core.GRANT_TYPE_IAM:
+		if !a.config.ExposedConfig().UsesIAMGrant {
+			ctx.StatusCode(fasthttp.StatusForbidden)
+			ctx.JSON(&auth.AuthorizeError{
+				Code:    auth.AuthErrInvalidRequest,
+				Message: "IAM grant is not enabled",
+			})
+			return
+		}
 	}
 
-	validator := core.NewTokenValidator(grantType[0], a.clientStore, &core.PfasAuthTokenValidatorConfig{
-		IntrospectionURL:          a.config.ExposedConfig().IntrospectionURL,
-		IntrospectionClientId:     a.config.ExposedConfig().IntrospectionClientID,
-		IntrospectionClientSecret: a.config.ExposedConfig().IntrospectionClientSecret,
-	})
+	if a.config.ExposedConfig().UsesPfasGrant {
+		pfasConfig = &core.PfasAuthTokenValidatorConfig{
+			IntrospectionURL:          a.config.ExposedConfig().IntrospectionURL,
+			IntrospectionClientId:     a.config.ExposedConfig().IntrospectionClientID,
+			IntrospectionClientSecret: a.config.ExposedConfig().IntrospectionClientSecret,
+		}
+	}
+
+	if a.config.ExposedConfig().UsesIAMGrant {
+		iamConfig = &core.IAMAuthTokenValidatorConfig{
+			Issuer:  a.config.ExposedConfig().IAMIssuer,
+			JWKSURL: a.config.ExposedConfig().IAMJWKSURL,
+		}
+	}
+
+	validator, err := core.NewTokenValidator(grantType, a.clientStore, pfasConfig, iamConfig)
+	if err != nil {
+		ctx.Error(err)
+		ctx.StatusCode(fasthttp.StatusInternalServerError)
+		return
+	}
+
 	result, err := validator.ValidateToken(ctx)
 	if err != nil {
 		ctx.Error(err)
@@ -70,6 +110,7 @@ func (a *IDAuth) clientCredentials(ctx *azugo.Context, grantType ...string) {
 		if errors.As(err, &authErr) {
 			ctx.JSON(authErr)
 		}
+		return
 	}
 
 	var role *core.RoleEntity
@@ -80,45 +121,64 @@ func (a *IDAuth) clientCredentials(ctx *azugo.Context, grantType ...string) {
 		}
 	}
 
-	issued := time.Now()
+	issued := time.Now().UTC()
+	ipStr := ctx.IP().String()
+	userAgentStr := ctx.UserAgent()
+
 	session := &core.Session{
-		ID:           ulid.Make().String(),
-		Subject:      userData.UserID,
-		FirstName:    userData.FirstName,
-		LastName:     userData.LastName,
-		Code:         userData.PersonCode,
-		Email:        userData.Email,
-		LastAccessed: &issued,
-		State:        string(core.SessionStateAuthorized),
-		Role:         role,
-		Roles:        userData.Roles,
-		Rights:       userData.Rights,
+		ID:              ulid.Make().String(),
+		Subject:         userData.UserID,
+		FirstName:       userData.FirstName,
+		LastName:        userData.LastName,
+		Code:            userData.PersonCode,
+		Email:           userData.Email,
+		PhoneNumber:     userData.PhoneNumber,
+		LastAccessed:    &issued,
+		State:           string(core.SessionStateAuthorized),
+		Role:            role,
+		Roles:           userData.Roles,
+		Rights:          userData.Rights,
+		IsServiceClient: userData.IsServiceClient,
+		IsTOSAccepted:   userData.IsTOSAccepted,
+		Device: &core.DeviceEntity{
+			IPAddress: &ipStr,
+			UserAgent: &userAgentStr,
+		},
 	}
 
 	_, err = a.sessionStore.Create(ctx, session)
+
+	auditData := &core.AuditEvent{
+		Session: session,
+		Events: &audit.SaveAuditEventJSONRequestBody{
+			{
+				EventCode:        util.PtrString("api_service_authorized"),
+				EventDescription: util.PtrString("API klients autorizēts"),
+				EventSuccessful:  util.PtrBool(err == nil),
+				IsApiUser:        util.PtrBool(session.IsServiceClient),
+				UserFullName:     util.PtrString(strings.TrimSpace(session.FirstName + " " + session.LastName)),
+				UserCode:         util.PtrString(session.Code),
+				UserId:           util.PtrString(session.Subject),
+				UserSessionId:    util.PtrString(session.ID),
+			},
+		},
+	}
+
+	if _, auditErr := a.auditProvider.SaveEvent(ctx, auditData); auditErr != nil && err == nil {
+		err = auditErr
+	}
+
 	if err != nil {
+		_ = a.sessionStore.Delete(ctx, session.ID)
 		ctx.Error(err)
 		return
 	}
 
-	err = a.auditProvider.SaveEvent(ctx, core.AuditEvent{
-		EventCode:        "api_service_authorized",
-		EventDescription: "API klients autorizēts",
-		EventSuccessful:  err == nil,
-		TransactionId:    uuid.NewString(), // TODO: izmantot padoto transakcijas ID ja ir pieejams
-		Session:          session,
+	ctx.JSON(&core.AccessTokenResponse{
+		AccessToken: session.ID,
+		TokenType:   core.AuthorizationBearer,
+		ExpiresIn:   core.GetSecondsToLive(a.config.ExposedConfig().SessionTimeout, session.LastAccessed),
 	})
-	if err != nil {
-		err = a.sessionStore.Delete(ctx, session.ID)
-		if err != nil {
-			ctx.Error(err)
-		}
-
-		ctx.Error(errors.New("error saving audit event"))
-		return
-	}
-
-	ctx.JSON(a.sessionToResponse(ctx, session))
 }
 
 func (a *IDAuth) authorizationCode(ctx *azugo.Context) {
@@ -150,7 +210,8 @@ func (a *IDAuth) authorizationCode(ctx *azugo.Context) {
 		return
 	}
 
-	ott, err := a.OTT().GetToken(ctx, code)
+	// redeem the token instead of getting it, so it can't be used again
+	ott, err := a.OTT().RedeemToken(ctx, code)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -165,28 +226,32 @@ func (a *IDAuth) authorizationCode(ctx *azugo.Context) {
 		return
 	}
 
-	if ott.RedirectURI != redirectURI {
+	validRedirect := false
+	if len(ott.RedirectURIs) > 0 {
+		for _, uri := range ott.RedirectURIs {
+			if uri == redirectURI {
+				validRedirect = true
+				break
+			}
+		}
+	} else {
+		validRedirect = (ott.RedirectURI == redirectURI)
+	}
+
+	if !validRedirect {
 		ctx.StatusCode(fasthttp.StatusUnauthorized)
 		ctx.JSON(&auth.AuthorizeError{
 			Code:    auth.AuthErrInvalidRequest,
 			Message: "Invalid redirect uri",
 		})
 
-		// invalidates token
-		_, err := a.OTT().RedeemToken(ctx, code)
-		if err != nil {
-			ctx.Error(err)
-		}
 		return
 	}
 
-	ott, err = a.OTT().RedeemToken(ctx, code)
-	if err != nil {
-		ctx.Error(err)
-	}
-
-	ctx.JSON(&map[string]string{
-		"access_token": ott.SessionToken,
+	ctx.JSON(&core.AccessTokenResponse{
+		AccessToken: ott.SessionToken,
+		TokenType:   core.AuthorizationBearer,
+		ExpiresIn:   core.GetSecondsToLive(a.config.ExposedConfig().SessionTimeout, ott.SessionCreated),
 	})
 }
 
@@ -212,7 +277,6 @@ func (a *IDAuth) authorize(ctx *azugo.Context) {
 		ctx.Error(err)
 		return
 	}
-
 	if !validRedirectURI(client, redirectURI) {
 		ctx.StatusCode(fasthttp.StatusBadRequest)
 		ctx.JSON(&auth.AuthorizeError{
@@ -257,13 +321,17 @@ func (a *IDAuth) authorize(ctx *azugo.Context) {
 	codeChallenge := ctx.Query.StringOptional("code_challenge")
 	codeChallengeMethod := ctx.Query.StringOptional("code_challenge_method")
 
+	// Azugo utils.B2S causes corrupted cached values for OICD providers
+	// Deep copies of variables are created to avoid this
+	// https://github.com/azugo/azugo/issues/20
+	// https://github.com/lx-lib/lx-idauth/issues/58
 	correlation, err := a.correlationStore.Set(ctx, &core.Correlation{
-		ClientID:            clientID,
-		RedirectURI:         redirectURI,
-		Nonce:               nonce,
-		State:               &state,
-		CodeChallenge:       codeChallenge,
-		CodeChallengeMethod: codeChallengeMethod,
+		ClientID:            util.CloneStr(clientID),
+		RedirectURI:         util.CloneStr(redirectURI),
+		Nonce:               util.CloneStrPtr(nonce),
+		State:               util.CloneStrPtr(&state),
+		CodeChallenge:       util.CloneStrPtr(codeChallenge),
+		CodeChallengeMethod: util.CloneStrPtr(codeChallengeMethod),
 	})
 	if err != nil {
 		ctx.Error(err)
@@ -293,7 +361,6 @@ func (a *IDAuth) callback(ctx *azugo.Context) {
 		ctx.StatusCode(fasthttp.StatusNotFound)
 		return
 	}
-
 	if a.handleSignoutResponse(ctx) {
 		return
 	}
@@ -341,7 +408,13 @@ func (a *IDAuth) callback(ctx *azugo.Context) {
 			zap.String("providerId", providerID),
 		)
 
-		sess.ErrorCode = string(auth.AuthErrInvalidCallback)
+		var authErr *auth.AuthorizeError
+		if errors.As(err, &authErr) {
+			sess.ErrorCode = string(authErr.Code)
+		} else {
+			sess.ErrorCode = string(auth.AuthErrInvalidCallback)
+		}
+
 		if err := a.RedirectToCaller(ctx, sess); err != nil {
 			ctx.Error(err)
 		}
@@ -374,7 +447,24 @@ func (a *IDAuth) callback(ctx *azugo.Context) {
 			return
 		}
 
-		ctx.Redirect(signoutURL)
+		ctx.RedirectUnsafe(signoutURL)
+		return
+	}
+
+	if err := a.RedirectToCaller(ctx, sess); err != nil {
+		ctx.Error(err)
+	}
+}
+
+func (a *IDAuth) oidcLogoutCallback(ctx *azugo.Context) {
+	sess, err := a.correlationStore.Get(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	if sess == nil || sess.ID == "" {
+		ctx.StatusCode(fasthttp.StatusNoContent)
 		return
 	}
 
@@ -391,32 +481,63 @@ func (a *IDAuth) deleteSession(ctx *azugo.Context) {
 		return
 	}
 
-	err = a.auditProvider.SaveEvent(ctx, core.AuditEvent{
-		EventCode:        "logout",
-		EventDescription: "Logout",
-		EventSuccessful:  err == nil,
-		TransactionId:    uuid.NewString(),
-		PersonData: []core.AuditEventPersonData{
+	logoutURL := a.providerLogoutURL(session)
+
+	err = a.sessionStore.Delete(ctx, sessionID)
+
+	auditData := &core.AuditEvent{
+		Session: session,
+		Events: &audit.SaveAuditEventJSONRequestBody{
 			{
-				FirstName:  session.FirstName,
-				LastName:   session.LastName,
-				PersonCode: session.Code,
+				EventCode:        util.PtrString("logout"),
+				EventDescription: util.PtrString("Atslēgšanās"),
+				EventSuccessful:  util.PtrBool(err == nil),
+				PersonAuditData: &[]struct {
+					FullName   *string `json:"fullName,omitempty"`
+					PersonCode *string `json:"personCode,omitempty"`
+				}{},
 			},
 		},
-		Session: session,
-	})
+	}
+
+	if _, auditErr := a.auditProvider.SaveEvent(ctx, auditData); auditErr != nil && err == nil {
+		err = auditErr
+	}
+
 	if err != nil {
 		ctx.Error(err)
 		return
 	}
 
-	err = a.sessionStore.Delete(ctx, sessionID)
-	if err != nil {
-		ctx.Error(err)
+	if logoutURL != "" {
+		ctx.StatusCode(fasthttp.StatusOK)
+		ctx.Text(logoutURL)
 		return
 	}
 
 	ctx.StatusCode(fasthttp.StatusNoContent)
+}
+
+// providerLogoutURL returns the upstream IDP logout URL when the session's
+// provider implements core.ProviderLogout and an id_token is available.
+func (a *IDAuth) providerLogoutURL(session *core.Session) string {
+	if session == nil || session.Metadata == nil {
+		return ""
+	}
+	providerID := session.Metadata[core.SessionMetaProviderID]
+	idToken := session.Metadata[core.SessionMetaIDToken]
+	if providerID == "" || idToken == "" {
+		return ""
+	}
+	provider, err := a.GetProvider(providerID)
+	if err != nil {
+		return ""
+	}
+	logout, ok := provider.(core.ProviderLogout)
+	if !ok {
+		return ""
+	}
+	return logout.LogoutURL(idToken)
 }
 
 func (a *IDAuth) getSession(ctx *azugo.Context) {
@@ -440,7 +561,8 @@ func (a *IDAuth) extendSession(ctx *azugo.Context) {
 }
 
 func (a *IDAuth) getSessionAvailableRoles(ctx *azugo.Context) {
-	sessionRoles := ctx.UserValue(SessionUserValueKey).(*core.Session).Roles
+	session := ctx.UserValue(SessionUserValueKey).(*core.Session)
+	sessionRoles := session.Roles
 	ctx.JSON(sessionRoles)
 }
 
@@ -451,7 +573,7 @@ func (a *IDAuth) sessionToResponse(ctx *azugo.Context, session *core.Session) *c
 
 	organization, role, scopes := getCurrentRole(session)
 
-	secondsToLive := session.GetSecondsToLive(a.config.ExposedConfig().SessionTimeout)
+	secondsToLive := core.GetSecondsToLive(a.config.ExposedConfig().SessionTimeout, session.LastAccessed)
 	if secondsToLive < 0 {
 		a.deleteSession(ctx)
 		return &core.SessionResponse{Active: false}
@@ -468,11 +590,14 @@ func (a *IDAuth) sessionToResponse(ctx *azugo.Context, session *core.Session) *c
 		GivenName:          session.FirstName,
 		FamilyName:         session.LastName,
 		Email:              util.PtrString(session.Email),
+		PhoneNumber:        session.PhoneNumber,
 		Institution:        organization,
 		Role:               role,
 		Scope:              scopes,
 		SecondsToLive:      secondsToLive,
 		SecondsToCountdown: int(a.config.ExposedConfig().SessionCountdown.Seconds()),
+		IsServiceClient:    session.IsServiceClient,
+		IsTOSAccepted:      util.PtrBool(session.IsTOSAccepted),
 	}
 
 	return resp
@@ -491,89 +616,242 @@ func (a *IDAuth) createSessionFromUserData(sess *core.Correlation, userData *cor
 	var role *core.RoleEntity
 	var state core.SessionState
 
-	if !a.config.ExposedConfig().SessionRequiresRole {
+	if a.config.ExposedConfig().AuthorizerRequiresTOS && !userData.IsTOSAccepted {
+		state = core.SessionStateRequireAgreement
+	} else if !a.config.ExposedConfig().SessionRequiresRole {
 		state = core.SessionStateAuthorized
 	} else if len(userData.Roles) == 0 {
-		// Role required, but user will have no roles to pick from
-		// Frontend should show a message regarding this in the role select screen
 		state = core.SessionStateRequireRole
 	} else if len(userData.Roles) == 1 {
+		state = core.SessionStateRequireRole
+
 		roleEntity := userData.Roles[0]
+
 		if !roleEntity.Blocked && (roleEntity.Organization == nil || !roleEntity.Organization.Blocked) {
 			role = getRoleByRelationID(userData.Roles, roleEntity.UserRoleID)
+
+			state = core.SessionStateAuthorized
 		}
-		state = core.SessionStateAuthorized
 	} else {
 		state = core.SessionStateRequireRole
 	}
 
-	issued := time.Now()
+	issued := time.Now().UTC()
 	return &core.Session{
-		ID:           sess.ID,
-		Subject:      userData.UserID,
-		FirstName:    userData.FirstName,
-		LastName:     userData.LastName,
-		Code:         userData.PersonCode,
-		Email:        userData.Email,
-		LastAccessed: &issued,
-		State:        string(state),
-		Role:         role,
-		Roles:        userData.Roles,
-		Rights:       userData.Rights,
+		ID:              sess.ID,
+		Subject:         userData.UserID,
+		FirstName:       userData.FirstName,
+		LastName:        userData.LastName,
+		Code:            userData.PersonCode,
+		Email:           userData.Email,
+		PhoneNumber:     userData.PhoneNumber,
+		LastAccessed:    &issued,
+		State:           string(state),
+		Role:            role,
+		Roles:           userData.Roles,
+		Rights:          userData.Rights,
+		IsServiceClient: userData.IsServiceClient,
+		IsTOSAccepted:   userData.IsTOSAccepted,
+	}
+}
+
+func (a *IDAuth) termsAccept(ctx *azugo.Context) {
+	session, err := a.sessionStore.GetSession(ctx)
+	if err != nil {
+		return
+	}
+
+	authToken := &core.AuthRequest{
+		PersonCode: session.Code,
+		FirstName:  session.FirstName,
+		LastName:   session.LastName,
+		Email:      session.Email,
+		ProviderID: "",
+		TOS:        true,
+	}
+
+	err = a.handleUserData(ctx, nil, authToken)
+
+	auditData := &core.AuditEvent{
+		Session: session,
+		Events: &audit.SaveAuditEventJSONRequestBody{
+			{
+				EventCode:        util.PtrString("terms_accept"),
+				EventDescription: util.PtrString("Piekrišana platformas lietošanas noteikumiem"),
+				EventType:        util.PtrString("POST"),
+				EventSuccessful:  util.PtrBool(err == nil),
+				PersonAuditData: &[]struct {
+					FullName   *string `json:"fullName,omitempty"`
+					PersonCode *string `json:"personCode,omitempty"`
+				}{},
+			},
+		},
+	}
+
+	if _, auditErr := a.auditProvider.SaveEvent(ctx, auditData); auditErr != nil && err == nil {
+		err = auditErr
+	}
+
+	if err != nil {
+		ctx.Error(err)
+		return
 	}
 }
 
 func (a *IDAuth) handleUserData(ctx *azugo.Context, sess *core.Correlation, authToken *core.AuthRequest) error {
 	req := &core.GetUserDataRequest{
-		Code:      authToken.PersonCode,
-		FirstName: authToken.FirstName,
-		LastName:  authToken.LastName,
-		Email:     authToken.Email,
+		Code:          authToken.PersonCode,
+		FirstName:     authToken.FirstName,
+		LastName:      authToken.LastName,
+		Email:         authToken.Email,
+		ProviderID:    authToken.ProviderID,
+		IsTOSAccepted: authToken.TOS,
+		Organizations: authToken.Organizations,
+		RawClaims:     authToken.RawClaims,
 	}
 
 	userData, err := a.authorizer.GetUserData(ctx, req)
 	if err != nil {
 		var authErr *auth.AuthorizeError
-		if errors.As(err, &authErr) {
-			sess.ErrorCode = string(authErr.Code)
-		} else {
-			sess.ErrorCode = string(auth.AuthErrServer)
+		if sess != nil {
+			if errors.As(err, &authErr) {
+				sess.ErrorCode = string(authErr.Code)
+			} else {
+				sess.ErrorCode = string(auth.AuthErrServer)
+			}
 		}
 		return err
+	}
+
+	if sess == nil {
+		current, getErr := a.sessionStore.GetSession(ctx)
+		if getErr != nil {
+			return getErr
+		}
+
+		issued := time.Now().UTC()
+		ipStr := ctx.IP().String()
+		userAgentStr := ctx.UserAgent()
+
+		current.Subject = userData.UserID
+		current.FirstName = userData.FirstName
+		current.LastName = userData.LastName
+		current.Code = userData.PersonCode
+		current.Email = userData.Email
+		current.PhoneNumber = userData.PhoneNumber
+		current.Roles = userData.Roles
+		current.Rights = userData.Rights
+		current.IsServiceClient = userData.IsServiceClient
+		current.IsTOSAccepted = userData.IsTOSAccepted
+		current.LastAccessed = &issued
+		if current.Device == nil {
+			current.Device = &core.DeviceEntity{}
+		}
+		current.Device.IPAddress = &ipStr
+		current.Device.UserAgent = &userAgentStr
+
+		if userData.IsTOSAccepted {
+			var role *core.RoleEntity
+			var state core.SessionState
+
+			if !a.config.ExposedConfig().SessionRequiresRole {
+				state = core.SessionStateAuthorized
+			} else if len(userData.Roles) == 0 {
+				state = core.SessionStateRequireRole
+			} else if len(userData.Roles) == 1 {
+				roleEntity := userData.Roles[0]
+				if !roleEntity.Blocked && (roleEntity.Organization == nil || !roleEntity.Organization.Blocked) {
+					role = getRoleByRelationID(userData.Roles, roleEntity.UserRoleID)
+				}
+				state = core.SessionStateAuthorized
+			} else {
+				state = core.SessionStateRequireRole
+			}
+
+			current.State = string(state)
+			current.Role = role
+		}
+
+		if _, err := a.sessionStore.Update(ctx, current); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	session := a.createSessionFromUserData(sess, userData)
+
+	if !sess.ManagedByProvider {
+		sess.SessionCreated = util.CloneTimePtr(session.LastAccessed)
 	}
 
 	if _, err := a.correlationStore.Set(ctx, sess); err != nil {
 		return err
 	}
 
-	session := a.createSessionFromUserData(sess, userData)
+	ipStr := ctx.IP().String()
+	userAgentStr := ctx.UserAgent()
 
-	_, err = a.sessionStore.Create(ctx, session)
-	if err != nil {
-		sess.ErrorCode = string(auth.AuthErrServer)
+	session.Device = &core.DeviceEntity{
+		IPAddress: &ipStr,
+		UserAgent: &userAgentStr,
 	}
 
-	err = a.auditProvider.SaveEvent(ctx, core.AuditEvent{
-		EventCode:        "login",
-		EventDescription: "Login",
-		EventSuccessful:  err == nil,
-		TransactionId:    uuid.NewString(),
-		PersonData: []core.AuditEventPersonData{
-			{
-				FirstName:  session.FirstName,
-				LastName:   session.LastName,
-				PersonCode: session.Code,
-			},
-		},
-		Session: session,
-	})
-	if err != nil {
-		err = a.sessionStore.Delete(ctx, session.ID)
-		if err != nil {
-			ctx.Error(err)
+	if authToken.ProviderID != "" || authToken.Token != "" {
+		if session.Metadata == nil {
+			session.Metadata = make(map[string]string, 2)
+		}
+		if authToken.ProviderID != "" {
+			session.Metadata[core.SessionMetaProviderID] = authToken.ProviderID
+		}
+		if authToken.Token != "" {
+			session.Metadata[core.SessionMetaIDToken] = authToken.Token
+		}
+	}
+
+	_, err = a.sessionStore.Create(ctx, session)
+
+	if a.config.ExposedConfig().AuthorizerRequiresTOS && !userData.IsTOSAccepted {
+		tos, derr := buildTOSRedirect(sess.RedirectURI, a.config.ExposedConfig().TOSEndpoint)
+		if derr != nil {
+			return derr
 		}
 
-		ctx.Error(errors.New("error saving audit event"))
+		sess.TOSTargetURI = &tos
+		if _, err := a.correlationStore.Set(ctx, sess); err != nil {
+			return err
+		}
+	}
+
+	auditData := &core.AuditEvent{
+		Session: session,
+		Events: &audit.SaveAuditEventJSONRequestBody{
+			{
+				EventCode:        util.PtrString("login"),
+				EventDescription: util.PtrString("Pieslēgšanās"),
+				EventType:        util.PtrString("POST"),
+				EventSuccessful:  util.PtrBool(err == nil),
+				IsApiUser:        util.PtrBool(session.IsServiceClient),
+				PersonAuditData: &[]struct {
+					FullName   *string `json:"fullName,omitempty"`
+					PersonCode *string `json:"personCode,omitempty"`
+				}{},
+				UserFullName:  util.PtrString(strings.TrimSpace(session.FirstName + " " + session.LastName)),
+				UserCode:      util.PtrString(session.Code),
+				UserId:        util.PtrString(session.Subject),
+				UserSessionId: util.PtrString(session.ID),
+			},
+		},
+	}
+
+	if _, auditErr := a.auditProvider.SaveEvent(ctx, auditData); auditErr != nil && err == nil {
+		err = auditErr
+	}
+
+	if err != nil {
+		_ = a.sessionStore.Delete(ctx, session.ID)
+		sess.ErrorCode = string(auth.AuthErrServer)
+		ctx.Error(err)
 		return err
 	}
 
@@ -586,6 +864,16 @@ type UpdateSessionRoleRequest struct {
 
 func (a *IDAuth) setSessionRole(ctx *azugo.Context) {
 	session := ctx.UserValue(SessionUserValueKey).(*core.Session)
+
+	if !session.IsRoleRequired() && !session.IsAuthorized() {
+		ctx.StatusCode(fasthttp.StatusBadRequest)
+		ctx.JSON(&auth.AuthorizeError{
+			Code:    auth.AuthErrInvalidRequest,
+			Message: "Role selection not allowed in current session state",
+		})
+		return
+	}
+
 	req := &UpdateSessionRoleRequest{}
 	if err := ctx.Body.JSON(req); err != nil {
 		ctx.Error(err)
@@ -621,25 +909,27 @@ func (a *IDAuth) setSessionRole(ctx *azugo.Context) {
 		session.State = string(core.SessionStateAuthorized)
 	}
 	session, err := a.sessionStore.Update(ctx, session)
-	if err != nil {
-		ctx.Error(err)
-		return
-	}
 
-	err = a.auditProvider.SaveEvent(ctx, core.AuditEvent{
-		EventCode:        "role_change",
-		EventDescription: "Role change",
-		EventSuccessful:  err == nil,
-		TransactionId:    uuid.NewString(),
-		PersonData: []core.AuditEventPersonData{
+	auditData := &core.AuditEvent{
+		Session: session,
+		Events: &audit.SaveAuditEventJSONRequestBody{
 			{
-				FirstName:  session.FirstName,
-				LastName:   session.LastName,
-				PersonCode: session.Code,
+				EventCode:        util.PtrString("role_change"),
+				EventDescription: util.PtrString("Lomas maiņa"),
+				EventType:        util.PtrString("PUT"),
+				EventSuccessful:  util.PtrBool(err == nil),
+				PersonAuditData: &[]struct {
+					FullName   *string `json:"fullName,omitempty"`
+					PersonCode *string `json:"personCode,omitempty"`
+				}{},
 			},
 		},
-		Session: session,
-	})
+	}
+
+	if _, auditErr := a.auditProvider.SaveEvent(ctx, auditData); auditErr != nil && err == nil {
+		err = auditErr
+	}
+
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -655,6 +945,35 @@ func validRedirectURI(client *core.Client, redirectURI string) bool {
 		}
 	}
 	return false
+}
+
+// buildTOSRedirect builds the TOS page URL from an original redirect_uri and endpoint.
+// Rules:
+// - If endpoint is empty, defaults to "/terms-of-service".
+// - Endpoint is normalized to start with a single leading slash.
+// - If original path ends with "/auth-done", replace that suffix with endpoint, preserving any prefix path.
+// - Otherwise, use scheme+host of original and set path to endpoint.
+func buildTOSRedirect(original string, endpoint string) (string, error) {
+	if endpoint == "" {
+		endpoint = "/terms-of-service"
+	}
+	if !strings.HasPrefix(endpoint, "/") {
+		endpoint = "/" + endpoint
+	}
+
+	u, err := url.Parse(original)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.HasSuffix(u.Path, "/auth-done") {
+		base := strings.TrimSuffix(u.Path, "/auth-done")
+		u.Path = base + endpoint
+	} else {
+		u.Path = endpoint
+	}
+	u.RawQuery = ""
+	return u.String(), nil
 }
 
 func getRoleByRelationID(roles []*core.RoleEntity, userRoleID string) *core.RoleEntity {
@@ -682,6 +1001,7 @@ func getCurrentRole(session *core.Session) (*core.UserOrganization, *core.RoleBa
 		Code:        session.Role.Code,
 		Name:        session.Role.Name,
 		Description: &session.Role.Description,
+		DataScopes:  session.Role.DataScopes,
 	}
 
 	if session.Role.Organization != nil {

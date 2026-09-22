@@ -2,15 +2,18 @@ package app
 
 import (
 	"errors"
+	"time"
 
-	"github.com/nobid-lsp-latvia/lx-idauth"
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth"
+	"github.com/lx-lib/lx-idauth/core"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/config"
 	"azugo.io/azugo/server"
 	"azugo.io/opentelemetry"
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 // App is the application instance.
@@ -67,9 +70,37 @@ func New(cmd *cobra.Command, version string) (*App, error) {
 		return nil, err
 	}
 
-	sessionStore, err := idauth.NewAzugoCacheSessionStore(app)
-	if err != nil {
-		return nil, err
+	var sessionStore core.SessionStore
+
+	switch config.SessionStoreType {
+	case "cache":
+		sessionStore, err = idauth.NewAzugoCacheSessionStore(app, config.SessionTimeout)
+		if err != nil {
+			return nil, err
+		}
+	case "postgres":
+		sessionStore, err = idauth.NewPostgresSessionStore(app, &idauth.PostgresSessionStoreConfig{
+			Postgres: config.Postgres,
+		})
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.New("unsupported session store type. valid values are cache, postgres")
+	}
+
+	if config.EnableSessionStoreCleanup {
+		cronjob := cron.New(cron.WithLocation(time.UTC))
+		_, err := cronjob.AddFunc(config.CleanupCronExpression, func() {
+			err := sessionStore.DeleteExpiredSessions(app.BackgroundContext(), config.SessionTimeout)
+			if err != nil {
+				zap.Error(err)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+		cronjob.Start()
 	}
 
 	var authorizer core.Authorizer
@@ -154,11 +185,16 @@ func (a *App) Correlation() core.CorrelationStore {
 
 // Start the application.
 func (a *App) Start() error {
+	err := a.auth.Session().StoreStart(a.App)
+	if err != nil {
+		return err
+	}
 	return a.App.Start()
 }
 
 // Stop the application.
 func (a *App) Stop() {
+	a.auth.Session().StoreStop()
 	a.App.Stop()
 }
 

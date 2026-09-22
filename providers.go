@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core"
 )
 
 // Register makes a authentification provider available by the provided name.

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"time"
+
 	"azugo.io/azugo"
 )
 
@@ -24,6 +26,10 @@ type Correlation struct {
 	ErrorCode string `json:"error_code"`
 	// ManagedByProvider is a flag that indicates if the session is managed by the provider
 	ManagedByProvider bool `json:"managed_by_provider"`
+	// SessionCreated is a time when the session was created if the session is not managed by the provider
+	SessionCreated *time.Time `json:"session_created"`
+	// TOSTargetURI is the computed TOS redirect URI, used for redirecting to TOS page if required
+	TOSTargetURI *string `json:"tos_target_uri,omitempty"`
 }
 
 type CorrelationStore interface {
@@ -33,9 +39,11 @@ type CorrelationStore interface {
 }
 
 type OneTimeToken struct {
-	ID           string `json:"id"`
-	RedirectURI  string `json:"redirect_uri"`
-	SessionToken string `json:"session_token"`
+	ID             string     `json:"id"`
+	RedirectURI    string     `json:"redirect_uri"`
+	RedirectURIs   []string   `json:"redirect_uris,omitempty"` // alternative valid redirect uri's
+	SessionToken   string     `json:"session_token"`
+	SessionCreated *time.Time `json:"session_created"`
 }
 
 // OTTStore manages the generation and exchange of one-time tokens.

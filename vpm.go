@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"net/url"
 
-	"github.com/nobid-lsp-latvia/lx-idauth/core"
+	"github.com/lx-lib/lx-idauth/core"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/wsfed"
@@ -32,10 +32,11 @@ func (e ErrExternalAuthNotFoundError) Error() string {
 }
 
 type VPMAuthProvider struct {
-	auth       *IDAuth
-	config     *core.AuthProviderConfig
-	wsfed      *wsfed.WsFederation
-	signoutURL string
+	auth        *IDAuth
+	config      *core.AuthProviderConfig
+	wsfed       *wsfed.WsFederation
+	signoutURL  string
+	claimMapper *jsonnetClaimMapper
 }
 
 func NewVPMService(auth *IDAuth, conf *core.AuthProviderConfig) (*VPMAuthProvider, error) {
@@ -43,6 +44,15 @@ func NewVPMService(auth *IDAuth, conf *core.AuthProviderConfig) (*VPMAuthProvide
 	if err != nil {
 		return nil, err
 	}
+
+	var claimMapper *jsonnetClaimMapper
+	if conf.ClaimMappingFile != "" {
+		claimMapper, err = newJSONNetClaimMapper(conf.ClaimMappingFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if len(conf.IDPEndpoint) > 0 {
 		var u *url.URL
 		if u, err = url.Parse(conf.IDPEndpoint); err != nil {
@@ -66,10 +76,11 @@ func NewVPMService(auth *IDAuth, conf *core.AuthProviderConfig) (*VPMAuthProvide
 		wsfed.AddTrustedSigningCertificate(idpCert)
 	}
 	return &VPMAuthProvider{
-		auth:       auth,
-		config:     conf,
-		wsfed:      wsfed,
-		signoutURL: "",
+		auth:        auth,
+		config:      conf,
+		wsfed:       wsfed,
+		signoutURL:  "",
+		claimMapper: claimMapper,
 	}, nil
 }
 
@@ -81,7 +92,7 @@ func (p *VPMAuthProvider) Authorize(ctx *azugo.Context, sess *core.Correlation) 
 		return nil
 	}
 
-	ctx.Redirect(url)
+	ctx.RedirectUnsafe(url)
 	return nil
 }
 
@@ -102,6 +113,29 @@ func (p *VPMAuthProvider) Callback(ctx *azugo.Context, sess *core.Correlation) (
 			return nil, err
 		}
 		p.signoutURL = signoutURL
+	}
+
+	if p.claimMapper != nil {
+		rawClaims := make(map[string]any, len(token.Claims.Attributes)+1)
+		for k, values := range token.Claims.Attributes {
+			rawClaims[k] = values
+		}
+
+		authToken, err := p.claimMapper.mapToAuthRequest(ctx, &ClaimMappingInput{
+			ProviderID:   p.config.ID,
+			ProviderType: p.config.Type,
+			Claims:       rawClaims,
+			Metadata:     p.config.Metadata,
+			Nonce:        sess.Nonce,
+			RawToken:     token.Validated,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		authToken.IPAddress = ctx.IP().String()
+		authToken.Nonce = sess.Nonce
+		return authToken, nil
 	}
 
 	authToken := p.convertVPM(token)

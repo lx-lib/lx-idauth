@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/lx-lib/lx-idauth/core"
+
 	"azugo.io/azugo"
 )
 
@@ -44,19 +46,31 @@ func (a *IDAuth) metadata() azugo.RequestHandler {
 			return
 		}
 
+		grantTypesSupported := []string{"client_credentials"}
+		responseTypesSupported := []string{}
+		tokenEndpointAuthMethodsSupported := []string{"client_secret_basic"}
+
+		if a.config.ExposedConfig().UsesAuthorizationCodeGrant {
+			grantTypesSupported = append(grantTypesSupported, "authorization_code")
+			responseTypesSupported = append(responseTypesSupported, "code")
+			tokenEndpointAuthMethodsSupported = append(tokenEndpointAuthMethodsSupported, "none")
+		}
+
+		if a.config.ExposedConfig().UsesIAMGrant {
+			grantTypesSupported = append(grantTypesSupported, core.GRANT_TYPE_IAM)
+		}
+
+		if a.config.ExposedConfig().UsesPfasGrant {
+			grantTypesSupported = append(grantTypesSupported, "pfas")
+		}
+
 		ctx.JSON(&OAuthConfiguration{
-			Issuer:           ctx.BaseURL(),
-			TokenEndpoint:    tokenEndpoint,
-			UserInfoEndpoint: userInfoEndpoint,
-			GrantTypesSupported: []string{
-				"password",
-			},
-			ResponseTypesSupported: []string{
-				"token",
-			},
-			TokenEndpointAuthMethodsSupported: []string{
-				"client_secret_post",
-			},
+			Issuer:                            ctx.BaseURL(),
+			TokenEndpoint:                     tokenEndpoint,
+			UserInfoEndpoint:                  userInfoEndpoint,
+			GrantTypesSupported:               grantTypesSupported,
+			ResponseTypesSupported:            responseTypesSupported,
+			TokenEndpointAuthMethodsSupported: tokenEndpointAuthMethodsSupported,
 		})
 	}
 }
